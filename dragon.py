@@ -1,79 +1,62 @@
 import os
+import asyncio
 from textual.app import App, ComposeResult
-from textual.widgets import Header, Footer, Input, Button, Static, Label, Select
+from textual.widgets import Header, Footer, Input, Button, Static, Label, Select, TabbedContent, TabPane, Log
 from textual.containers import Container, Horizontal, Vertical
-from textual import on
+from textual import on, work
 import yt_dlp
 
 class DawnloaderApp(App):
-    """A professional TUI for downloading media."""
-    
-    TITLE = "Dawnloader v3.0-Pro"
+    TITLE = "Dawnloader Pro"
     SUB_TITLE = "The Ultimate Media Engine by PyDragonX"
+    
+    # CSS لتنسيق الواجهة بشكل فخم
     CSS = """
-    Container {
-        align: center middle;
-        padding: 1;
-    }
-    #main_panel {
-        width: 80%;
-        height: auto;
-        border: double cyan;
-        padding: 1 2;
-        background: $surface;
-    }
-    .logo {
-        content-align: center middle;
-        color: cyan;
-        margin-bottom: 1;
-        text-style: bold;
-    }
-    Input {
-        margin: 1 0;
-        border: tall magenta;
-    }
-    Button {
-        width: 100%;
-        margin-top: 1;
-    }
-    #exit_btn {
-        background: red;
-        color: white;
-    }
-    .status_label {
-        text-align: center;
-        margin-top: 1;
-        color: yellow;
-    }
+    Screen { background: #0f172a; }
+    #main_container { padding: 1; align: center middle; }
+    .logo { color: cyan; text-align: center; text-style: bold; margin-bottom: 1; }
+    TabPane { padding: 1; }
+    Input { border: tall magenta; margin-bottom: 1; }
+    Button { width: 100%; margin: 1 0; }
+    .status_ok { color: green; text-style: bold; }
+    .status_error { color: red; }
+    Log { height: 10; border: solid gray; margin-top: 1; }
     """
 
     def compose(self) -> ComposeResult:
-        yield Header()
-        with Container():
-            with Vertical(id="main_panel"):
-                yield Static(r"""
+        yield Header(show_clock=True)
+        with Container(id="main_container"):
+            yield Static(r"""
     ____                         __                 __            
    / __ \____ _      ____  / /___  ____ _____  / /__  _____
   / / / / __ `/ | /| / / __ \/ / __ \/ __ `/ __  / _ \/ ___/
  / /_/ / /_/ /| |/ |/ / / / / / /_/ / /_/ / /_/ /  __/ /    
 /_____/\__,_/ |__/|__/_/ /_/_/\____/\__,_/\__,_/\___/_/     
-                """, classes="logo")
-                
-                yield Label("🔗 Paste Link or Search Name:")
-                yield Input(placeholder="e.g. https://youtube.com/... or Video Name", id="user_input")
-                
-                yield Label("⚙️ Select Format:")
-                yield Select(
-                    [("Video (Best Quality)", "1"), ("Audio (MP3 320kbps)", "2")],
-                    value="1",
-                    id="format_select"
-                )
-                
-                with Horizontal():
-                    yield Button("📥 Start Download", variant="success", id="download_btn")
-                    yield Button("❌ Exit Tool", variant="error", id="exit_btn")
-                
-                yield Label("", id="status", classes="status_label")
+            """, classes="logo")
+
+            with TabbedContent():
+                with TabPane("📥 Download", id="download_tab"):
+                    yield Label("🔗 URL or Search Query:")
+                    yield Input(placeholder="Enter link or video name...", id="url_input")
+                    
+                    yield Label("⚙️ Format:")
+                    yield Select([("Video + Audio", "vid"), ("Audio Only (MP3)", "aud")], value="vid", id="mode_select")
+                    
+                    with Horizontal():
+                        yield Button("🚀 Start Download", variant="success", id="start_btn")
+                        yield Button("🧹 Clear", variant="default", id="clear_btn")
+                    
+                    yield Label("", id="status_msg")
+                    yield Log(id="process_log")
+
+                with TabPane("📜 History", id="history_tab"):
+                    yield Label("Recent Downloads:")
+                    yield Log(id="history_log")
+
+                with TabPane("⚙️ Settings", id="settings_tab"):
+                    yield Label(f"📂 Save Path: {self.get_save_path()}")
+                    yield Button("🔄 Update Download Engine (yt-dlp)", variant="primary", id="update_btn")
+                    yield Button("❌ Exit Application", variant="error", id="exit_btn")
         yield Footer()
 
     def get_save_path(self):
@@ -82,36 +65,48 @@ class DawnloaderApp(App):
         return path
 
     @on(Button.Pressed, "#exit_btn")
-    def quit_app(self):
+    def action_exit(self):
         self.exit()
 
-    @on(Button.Pressed, "#download_btn")
-    def action_download(self):
-        user_query = self.query_one("#user_input", Input).value
-        mode = self.query_one("#format_select", Select).value
-        status = self.query_one("#status", Label)
+    @on(Button.Pressed, "#clear_btn")
+    def action_clear(self):
+        self.query_one("#url_input", Input).value = ""
+        self.query_one("#status_msg", Label).update("")
 
-        if not user_query:
-            status.update("⚠️ Please enter a link or name!")
+    @on(Button.Pressed, "#update_btn")
+    @work(thread=True)
+    def update_engine(self):
+        self.query_one("#process_log", Log).write_line("Updating yt-dlp...")
+        os.system("pip install -U yt-dlp")
+        self.notify("Engine Updated Successfully!", title="System Update")
+
+    @on(Button.Pressed, "#start_btn")
+    def handle_download(self):
+        query = self.query_one("#url_input", Input).value
+        mode = self.query_one("#mode_select", Select).value
+        if not query:
+            self.notify("Please enter something to download!", severity="error")
             return
+        
+        self.query_one("#status_msg", Label).update("[yellow]Processing...[/yellow]")
+        self.run_download(query, mode)
 
-        status.update("🔍 Searching and Processing...")
-        self.run_worker(self.process_download(user_query, mode))
-
-    async def process_download(self, query, mode):
-        status = self.query_one("#status", Label)
+    @work(thread=True)
+    def run_download(self, query, mode):
+        log = self.query_one("#process_log", Log)
+        history = self.query_one("#history_log", Log)
         save_path = self.get_save_path()
         
         is_url = query.startswith(("http", "www"))
-        search_query = query if is_url else f"ytsearch1:{query}"
+        final_query = query if is_url else f"ytsearch1:{query}"
 
         ydl_opts = {
             'outtmpl': f'{save_path}/%(title)s.%(ext)s',
-            'quiet': True,
-            'no_warnings': True,
+            'logger': MyLogger(log),
+            'progress_hooks': [lambda d: self.update_status(d)],
         }
 
-        if mode == "1":
+        if mode == "vid":
             ydl_opts.update({'format': 'bestvideo+bestaudio/best', 'merge_output_format': 'mp4'})
         else:
             ydl_opts.update({
@@ -121,13 +116,25 @@ class DawnloaderApp(App):
 
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                # Running in a thread to keep UI responsive
-                info = await self.run_worker(lambda: ydl.extract_info(search_query, download=True), thread=True)
+                info = ydl.extract_info(final_query, download=True)
                 title = info.get('title', 'Video') if is_url else info['entries'][0]['title']
-                status.update(f"✅ Downloaded: {title[:30]}...")
+                self.call_from_thread(self.notify, f"Finished: {title}", title="Download Complete")
+                history.write_line(f"✅ {title}")
+                self.query_one("#status_msg", Label).update("[green]Download Finished![/green]")
         except Exception as e:
-            status.update(f"❌ Error: {str(e)[:50]}")
+            log.write_line(f"Error: {e}")
+            self.query_one("#status_msg", Label).update("[red]Download Failed![/red]")
+
+    def update_status(self, d):
+        if d['status'] == 'downloading':
+            p = d.get('_percent_str', '0%')
+            self.query_one("#status_msg", Label).update(f"[cyan]Downloading: {p}[/cyan]")
+
+class MyLogger:
+    def __init__(self, log_widget): self.log_widget = log_widget
+    def debug(self, msg): self.log_widget.write_line(msg)
+    def warning(self, msg): self.log_widget.write_line(f"⚠️ {msg}")
+    def error(self, msg): self.log_widget.write_line(f"❌ {msg}")
 
 if __name__ == "__main__":
-    app = DawnloaderApp()
-    app.run()
+    DawnloaderApp().run()
