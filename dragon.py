@@ -1,11 +1,10 @@
 import os
-import sys
 import yt_dlp
 from rich.console import Console
 from rich.panel import Panel
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, DownloadColumn, TransferSpeedColumn, TimeRemainingColumn
 from rich.table import Table
-from rich.prompt import Prompt, Confirm
+from rich.prompt import Prompt
 
 # Initialize Console
 console = Console()
@@ -19,10 +18,11 @@ class Dawnloader:
         # Path Management (Linux/Termux)
         self.save_dir = '/sdcard/Download/Dawnloader' if os.path.exists('/sdcard') else './Downloads'
         if not os.path.exists(self.save_dir):
-            os.makedirs(self.save_dir)
+            os.makedirs(self.save_dir, exist_ok=True)
 
     def print_banner(self):
-        ascii_art = """
+        # Added 'r' before the string to fix SyntaxWarning (invalid escape sequence)
+        ascii_art = r"""
     ____                         __                 __            
    / __ \____ _      ____  / /___  ____ _____  / /__  _____
   / / / / __ `/ | /| / / __ \/ / __ \/ __ `/ __  / _ \/ ___/
@@ -44,7 +44,7 @@ class Dawnloader:
         is_url = query.startswith(("http", "www"))
         search_engine = f"ytsearch1:{query}" if not is_url else query
         
-        with console.status("[bold yellow]⚡ Fetching data from servers...", spinner="bouncingBall"):
+        with console.status("[bold yellow]⚡ Searching...", spinner="bouncingBall"):
             ydl_opts = {'quiet': True, 'no_warnings': True, 'extract_flat': False}
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 try:
@@ -53,11 +53,11 @@ class Dawnloader:
                         return info['entries'][0]
                     return info
                 except Exception as e:
-                    console.print(f"[bold red]❌ Network Error:[/bold red] {e}")
+                    console.print(f"[bold red]❌ Error:[/bold red] {e}")
                     return None
 
     def get_download_options(self, mode):
-        """Configure yt-dlp based on user choice"""
+        """Configure yt-dlp options"""
         base_opts = {
             'outtmpl': f'{self.save_dir}/%(title)s.%(ext)s',
             'quiet': True,
@@ -66,12 +66,12 @@ class Dawnloader:
             'addmetadata': True,
         }
 
-        if mode == "1": # 🎬 Ultra Video
+        if mode == "1": # Video
             base_opts.update({
                 'format': 'bestvideo+bestaudio/best',
                 'merge_output_format': 'mp4',
             })
-        elif mode == "2": # 🎶 Crystal Audio
+        elif mode == "2": # Audio
             base_opts.update({
                 'format': 'bestaudio/best',
                 'postprocessors': [{
@@ -83,10 +83,11 @@ class Dawnloader:
         return base_opts
 
     def run_download(self, url, opts):
+        """Download logic with progress bar"""
         with Progress(
-            SpinnerColumn(spinner_name="dots"),
+            SpinnerColumn(),
             TextColumn("[bold blue]{task.description}"),
-            BarColumn(bar_width=None, pulse_style="cyan"),
+            BarColumn(bar_width=None, style="white", complete_style="bold cyan"),
             DownloadColumn(),
             TransferSpeedColumn(),
             TimeRemainingColumn(),
@@ -96,9 +97,9 @@ class Dawnloader:
 
             def progress_hook(d):
                 if d['status'] == 'downloading':
-                    clean_perc = d.get('_percent_str', '0%').replace('%', '').strip()
                     try:
-                        progress.update(task, completed=float(clean_perc))
+                        p = d.get('_percent_str', '0%').replace('%', '').strip()
+                        progress.update(task, completed=float(p))
                     except: pass
                 elif d['status'] == 'finished':
                     progress.update(task, completed=100, description="🔥 Finalizing...")
@@ -107,33 +108,30 @@ class Dawnloader:
             with yt_dlp.YoutubeDL(opts) as ydl:
                 ydl.download([url])
 
-    def main_loop(self):
+    def run(self): # Unified function name to fix AttributeError
         self.print_banner()
         while True:
-            console.print(f"\n[bold white]📍 Saving to:[/bold white] [underline yellow]{self.save_dir}[/underline yellow]")
-            user_input = Prompt.ask("[bold green]📥 Paste Link or Search Name[/bold green] (or 'q' to quit)")
+            console.print(f"\n[bold white]📍 Path:[/bold white] [yellow]{self.save_dir}[/yellow]")
+            user_input = Prompt.ask("[bold green]📥 Link or Search Name[/bold green] (or 'q' to quit)")
 
             if user_input.lower() in ['q', 'quit', 'exit']:
-                console.print(Panel(f"Thanks for using [bold cyan]Dawnloader[/bold cyan]!\nCheck out more tools at: [bold magenta]{self.github_link}[/bold magenta]", border_style="cyan"))
+                console.print(f"[bold red]👋 Goodbye! Visit: {self.github_link}[/bold red]")
                 break
 
             video = self.fetch_info(user_input)
             if not video: continue
 
-            # UI Display for Video Info
+            # UI Display
             info_table = Table(show_header=False, border_style="dim")
-            info_table.add_row("[bold cyan]Video Title[/bold cyan]", video.get('title'))
-            info_table.add_row("[bold cyan]Uploader[/bold cyan]", video.get('uploader'))
-            info_table.add_row("[bold cyan]Duration[/bold cyan]", f"{video.get('duration')} sec")
-            console.print(Panel(info_table, title="🔍 Result Found", border_style="cyan"))
+            info_table.add_row("[bold cyan]Title[/bold cyan]", video.get('title'))
+            info_table.add_row("[bold cyan]Channel[/bold cyan]", video.get('uploader'))
+            console.print(Panel(info_table, title="🔍 Found", border_style="cyan"))
 
-            # Format Menu
             menu = Table(show_header=True, header_style="bold magenta", expand=True)
-            menu.add_column("Key", justify="center", width=5)
-            menu.add_column("Type", width=15)
-            menu.add_column("Quality/Details")
-            menu.add_row("1", "🎬 Video", "Best Available (MP4/MKV)")
-            menu.add_row("2", "🎶 Audio", "High Quality MP3 (320kbps)")
+            menu.add_column("Key", justify="center")
+            menu.add_column("Format")
+            menu.add_row("1", "🎬 Video (MP4)")
+            menu.add_row("2", "🎶 Audio (MP3 320kbps)")
             console.print(menu)
 
             mode = Prompt.ask("Select Mode", choices=["1", "2"], default="1")
@@ -141,13 +139,13 @@ class Dawnloader:
             try:
                 download_opts = self.get_download_options(mode)
                 self.run_download(video.get('webpage_url'), download_opts)
-                console.print(f"\n[bold green]✅ DOWNLOAD FINISHED![/bold green] Find your file in [yellow]{self.save_dir}[/yellow]")
+                console.print(f"\n[bold green]✅ DONE![/bold green] File: [yellow]{self.save_dir}[/yellow]")
             except Exception as e:
-                console.print(f"[bold red]❌ Fatal Error:[/bold red] {e}")
+                console.print(f"[bold red]❌ Error:[/bold red] {e}")
 
 if __name__ == "__main__":
     try:
         app = Dawnloader()
-        app.run()
+        app.run() # Fixed: Now matches the function name
     except KeyboardInterrupt:
-        console.print("\n[bold red]Interrupted by user.[/bold red]")
+        console.print("\n[bold red]Closed.[/bold red]")
